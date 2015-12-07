@@ -22,6 +22,10 @@ struct update_data
   float l1_lambda;
   float l2_lambda;
   float predict;
+  bool is_use_dropout;
+  float dropout_rate;
+  vector<bool> dropout_tag; // mem-efficient data structure
+  vector<bool>::iterator dropout_tag_iter;
 };
 
 struct ftrl
@@ -31,10 +35,23 @@ struct ftrl
   struct update_data data;
   size_t no_win_counter;
   size_t early_stop_thres;
+  bool is_use_dropout;
+  float dropout_rate;
 };
 
 void predict(ftrl& b, base_learner&, example& ec)
 { ec.partial_prediction = GD::inline_predict(*b.all, ec);
+  ec.pred.scalar = GD::finalize_prediction(b.all->sd, ec.partial_prediction);
+  if (b.is_use_dropout) {
+    ec.pred.scalar *= (1.0 - b.dropout_rate);
+  }
+}
+
+void inner_dropout_and_predict(update_data&, float, float&);
+void dropout_and_predict(ftrl& b, base_learner&, example& ec)
+{ b.data.predict = ec.l.simple.initial;
+  GD::foreach_feature<update_data, inner_dropout_and_predict>(*b.all, ec, b.data);
+  ec.partial_prediction = b.data.predict;
   ec.pred.scalar = GD::finalize_prediction(b.all->sd, ec.partial_prediction);
 }
 
@@ -48,14 +65,34 @@ void multipredict(ftrl& b, base_learner&, example& ec, size_t count, size_t step
     for (size_t c=0; c<count; c++)
       pred[c].scalar *= (float)all.sd->contraction;
   if (finalize_predictions)
-    for (size_t c=0; c<count; c++)
+    for (size_t c=0; c<count; c++) {
       pred[c].scalar = GD::finalize_prediction(all.sd, pred[c].scalar);
+      if (b.is_use_dropout) {
+        pred[c].scalar *= (1.0 - b.dropout_rate);
+      }
+    }
 }
 
 inline float sign(float w) { if (w < 0.) return -1.; else  return 1.;}
 
+void inner_dropout_and_predict(update_data& d, float x, float& wref) {
+  if (d.is_use_dropout && (rand()%1000)/1000.0 < d.dropout_rate) {
+    d.dropout_tag.push_back(true);
+  } else {
+    d.dropout_tag.push_back(false);
+    d.predict += x * wref;
+  }
+}
+
 void inner_update_proximal(update_data& d, float x, float& wref)
-{ float* w = &wref;
+{
+  assert(d.dropout_tag_iter != d.dropout_tag.end());
+  if (*d.dropout_tag_iter) {
+    ++d.dropout_tag_iter;
+    return;
+  }
+  ++d.dropout_tag_iter;
+  float* w = &wref;
   float gradient = d.update * x;
   float ng2 = w[W_G2] + gradient * gradient;
   float sqrt_ng2 = sqrtf(ng2);
@@ -120,12 +157,15 @@ void update_after_prediction_pistol(ftrl& b, example& ec)
 
 void learn_proximal(ftrl& a, base_learner& base, example& ec)
 { assert(ec.in_use);
+  // initializing
+  a.data.dropout_tag.clear();
 
-  // predict
-  predict(a, base, ec);
+  // predict with configurable dropout
+  dropout_and_predict(a, base, ec);
 
   //update state based on the prediction
-  update_after_prediction_proximal(a,ec);
+  a.data.dropout_tag_iter = a.data.dropout_tag.begin();
+  update_after_prediction_proximal(a, ec);
 }
 
 void learn_pistol(ftrl& a, base_learner& base, example& ec)
@@ -176,7 +216,9 @@ base_learner* ftrl_setup(vw& all)
 
   new_options(all, "FTRL options")
   ("ftrl_alpha", po::value<float>(), "Learning rate for FTRL optimization")
-  ("ftrl_beta", po::value<float>(), "FTRL beta parameter");
+  ("ftrl_beta", po::value<float>(), "FTRL beta parameter")
+  ("ftrl_use_dropout", "use dropout in training")
+  ("ftrl_dropout_rate", po::value<float>()->default_value(0.2f), "FTRL dropout rate for features. Default: 0.2");
   add_options(all);
 
   po::variables_map& vm = all.vm;
@@ -213,10 +255,21 @@ base_learner* ftrl_setup(vw& all)
     else
       b.ftrl_beta = 0.5f;
   }
+  b.is_use_dropout = false;
+  if (vm.count("ftrl_use_dropout")) {
+    b.is_use_dropout = true;
+    srand(time(NULL));
+  }
+  if (vm.count("ftrl_dropout_rate"))
+    b.dropout_rate = vm["ftrl_dropout_rate"].as<float>();
+  else
+    b.dropout_rate = 0.2;
   b.data.ftrl_alpha = b.ftrl_alpha;
   b.data.ftrl_beta = b.ftrl_beta;
   b.data.l1_lambda = b.all->l1_lambda;
   b.data.l2_lambda = b.all->l2_lambda;
+  b.data.is_use_dropout = b.is_use_dropout;
+  b.data.dropout_rate = b.dropout_rate;
 
   all.reg.stride_shift = 2; // NOTE: for more parameter storage
 
@@ -225,6 +278,9 @@ base_learner* ftrl_setup(vw& all)
     cerr << "Algorithm used: " << algorithm_name << endl;
     cerr << "ftrl_alpha = " << b.ftrl_alpha << endl;
     cerr << "ftrl_beta = " << b.ftrl_beta << endl;
+    if (b.data.is_use_dropout) {
+      cerr << "Enabling dropout, with ratio " << b.data.dropout_rate << endl;
+    }
   }
 
   if(!all.holdout_set_off)
