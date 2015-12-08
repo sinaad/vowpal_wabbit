@@ -24,7 +24,8 @@ BOOST_LIBRARY = -L /usr/lib
 NPROCS := 1
 
 ifeq ($(UNAME), Linux)
-  BOOST_LIBRARY += -L /usr/lib/x86_64-linux-gnu
+  BOOST_LIBRARY += -L /usr/lib/x86_64-linux-gnu -L/usr/local/lib
+	BOOST_INCLUDE += -I /usr/local/include
   NPROCS:=$(shell grep -c ^processor /proc/cpuinfo)
 endif
 ifeq ($(UNAME), FreeBSD)

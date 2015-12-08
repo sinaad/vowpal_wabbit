@@ -111,6 +111,22 @@ void inner_update_proximal(update_data& d, float x, float& wref)
   }
 }
 
+void inner_update_biasterm_proximal(update_data& d, float x, float& wref) {
+  float* w = &wref;
+  float gradient = d.update * x;
+  float ng2 = w[W_G2] + gradient * gradient;
+  float sqrt_ng2 = sqrtf(ng2);
+  float sqrt_wW_G2 = sqrtf(w[W_G2]);
+  float sigma = (sqrt_ng2 - sqrt_wW_G2)/ d.ftrl_alpha;
+  w[W_ZT] += gradient - sigma * w[W_XT];
+  w[W_G2] = ng2;
+  sqrt_wW_G2 = sqrt_ng2;
+  float flag = sign(w[W_ZT]);
+  float fabs_zt = w[W_ZT] * flag;
+  float step = d.ftrl_alpha/(d.ftrl_beta + sqrt_wW_G2);
+  w[W_XT] = step * flag * ( - fabs_zt);
+}
+
 void inner_update_pistol_state_and_predict(update_data& d, float x, float& wref)
 { float* w = &wref;
 
@@ -145,7 +161,10 @@ void update_after_prediction_proximal(ftrl& b, example& ec)
 { b.data.update = b.all->loss->first_derivative(b.all->sd, ec.pred.scalar, ec.l.simple.label)
                   *ec.weight;
 
-  GD::foreach_feature<update_data, inner_update_proximal>(*b.all, ec, b.data);
+  GD::foreach_feature<
+    update_data, float&,
+    inner_update_proximal,
+    inner_update_biasterm_proximal>(*b.all, ec, b.data);
 }
 
 void update_after_prediction_pistol(ftrl& b, example& ec)

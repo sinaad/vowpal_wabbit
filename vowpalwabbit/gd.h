@@ -72,6 +72,25 @@ inline void foreach_feature(vw& all, example& ec, R& dat)
   INTERACTIONS::generate_interactions<R,S,T>(all, ec, dat);
 }
 
+// iterate through all namespaces and quadratic&cubic features, callback function 
+// T_normal(some_data_R, feature_value_x, S) for non-constant features
+// T_constant(some_data_R, feature_value_x, S) for constant features
+// where S is EITHER float& feature_weight OR uint32_t feature_index
+template <class R, class S, void (*TN)(R&, float, S), void (*TC)(R&, float, S)>
+inline void foreach_feature(vw& all, example& ec, R& dat)
+{ uint32_t offset = ec.ft_offset;
+
+  for (unsigned char* i = ec.indices.begin; i != ec.indices.end; i++) {
+    if (*i != constant_namespace) {
+      foreach_feature<R,TN>(all.reg.weight_vector, all.reg.weight_mask, ec.atomics[*i].begin, ec.atomics[*i].end, dat, offset);
+    } else {
+      foreach_feature<R,TC>(all.reg.weight_vector, all.reg.weight_mask, ec.atomics[*i].begin, ec.atomics[*i].end, dat, offset);
+    }
+  }
+
+  INTERACTIONS::generate_interactions<R,S,TN>(all, ec, dat);
+}
+
 // iterate through all namespaces and quadratic&cubic features, callback function T(some_data_R, feature_value_x, feature_weight)
 template <class R, void (*T)(R&, float, float&)>
 inline void foreach_feature(vw& all, example& ec, R& dat)
