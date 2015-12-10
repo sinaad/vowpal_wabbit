@@ -47,10 +47,14 @@ void predict(ftrl& b, base_learner&, example& ec)
   }
 }
 
+template<bool use_dropout>
 void inner_dropout_and_predict(update_data&, float, float&);
 void dropout_and_predict(ftrl& b, base_learner&, example& ec)
 { b.data.predict = ec.l.simple.initial;
-  GD::foreach_feature<update_data, inner_dropout_and_predict>(*b.all, ec, b.data);
+  GD::foreach_feature<
+    update_data, float&,
+    inner_dropout_and_predict<true>,
+    inner_dropout_and_predict<false> >(*b.all, ec, b.data);
   ec.partial_prediction = b.data.predict;
   ec.pred.scalar = GD::finalize_prediction(b.all->sd, ec.partial_prediction);
 }
@@ -75,11 +79,16 @@ void multipredict(ftrl& b, base_learner&, example& ec, size_t count, size_t step
 
 inline float sign(float w) { if (w < 0.) return -1.; else  return 1.;}
 
+template<bool use_dropout>
 void inner_dropout_and_predict(update_data& d, float x, float& wref) {
-  if (d.is_use_dropout && (rand()%1000)/1000.0 < d.dropout_rate) {
-    d.dropout_tag.push_back(true);
+  if (use_dropout) {
+    if (d.is_use_dropout && (rand()%1000)/1000.0 < d.dropout_rate) {
+      d.dropout_tag.push_back(true);
+    } else {
+      d.dropout_tag.push_back(false);
+      d.predict += x * wref;
+    }
   } else {
-    d.dropout_tag.push_back(false);
     d.predict += x * wref;
   }
 }
@@ -112,6 +121,7 @@ void inner_update_proximal(update_data& d, float x, float& wref)
 }
 
 void inner_update_biasterm_proximal(update_data& d, float x, float& wref) {
+  // no dropout for biasterm
   float* w = &wref;
   float gradient = d.update * x;
   float ng2 = w[W_G2] + gradient * gradient;
